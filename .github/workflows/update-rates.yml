@@ -1,0 +1,43 @@
+name: Update exchange rates
+
+on:
+  schedule:
+    # 01:00 UTC = 08:00 Vietnam time (UTC+7)
+    - cron: "0 1 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-rates
+  cancel-in-progress: false
+
+jobs:
+  update-rates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Fetch latest exchange rates
+        env:
+          EXCHANGERATE_API_KEY: ${{ secrets.EXCHANGERATE_API_KEY }}
+        run: node scripts/fetch-rates.js
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- rates.json; then
+            echo "No changes to rates.json, skipping commit."
+          else
+            git add rates.json
+            git commit -m "chore: update exchange rates ($(date -u +'%Y-%m-%d'))"
+            git push
+          fi
