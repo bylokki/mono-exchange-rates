@@ -2,8 +2,8 @@ name: Update exchange rates
 
 on:
   schedule:
-    # 01:00 UTC = 08:00 Vietnam time (UTC+7)
-    - cron: "0 1 * * *"
+    # Twice daily: 01:00/13:00 UTC = 08:00/20:00 Vietnam time (UTC+7)
+    - cron: "0 1,13 * * *"
   workflow_dispatch: {}
 
 permissions:
