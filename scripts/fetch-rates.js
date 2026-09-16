@@ -37,7 +37,7 @@ const RATES_FILE = path.join(__dirname, "..", "rates.json");
 
 // Vietnamese fund certificates ("chứng chỉ quỹ") to include, keyed by fmarket.vn's
 // `code` field. Add more codes here as support is rolled out for additional funds.
-const FUND_CODES = ["VFF"];
+const FUND_CODES = ["VFF", "VESAF", "VIBF", "VLBF"];
 
 const FMARKET_PRODUCTS_URL = "https://api.fmarket.vn/res/products/filter";
 const FMARKET_TIMEOUT_MS = 15000;
