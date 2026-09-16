@@ -31,13 +31,29 @@ jobs:
         run: node scripts/fetch-rates.js
 
       - name: Commit and push if changed
+        id: commit
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           if git diff --quiet -- rates.json; then
             echo "No changes to rates.json, skipping commit."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             git add rates.json
             git commit -m "chore: update exchange rates ($(date -u +'%Y-%m-%d'))"
             git push
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Purge jsDelivr CDN cache
+        if: steps.commit.outputs.changed == 'true'
+        run: |
+          # jsDelivr fronts raw.githubusercontent.com with its own cache, independent of the
+          # commit itself — without an explicit purge, consumers (the Mono app) can keep seeing
+          # a stale rates.json for as long as jsDelivr's own TTL, on top of the app's local cache.
+          status=$(curl -s -o /tmp/purge-response.json -w "%{http_code}" \
+            "https://purge.jsdelivr.net/gh/bylokki/mono-exchange-rates@main/rates.json")
+          cat /tmp/purge-response.json
+          if [ "$status" != "200" ]; then
+            echo "WARNING: jsDelivr purge request returned HTTP $status. CDN may still serve a stale rates.json until its own cache expires."
           fi
