@@ -35,11 +35,14 @@ const path = require("path");
 
 const RATES_FILE = path.join(__dirname, "..", "rates.json");
 
-// Vietnamese fund certificates ("chứng chỉ quỹ") to include, keyed by fmarket.vn's
-// `code` field. Add more codes here as support is rolled out for additional funds.
-const FUND_CODES = ["VFF", "VESAF", "VIBF", "VLBF"];
+// Vietnamese fund certificates ("chứng chỉ quỹ") to include, keyed by fmarket.vn's short
+// name — the same code shown in the fund's URL (fmarket.vn/quy/<code>). Add more codes here
+// as support is rolled out for additional funds. Note: a fund's short name can differ from
+// its internal product `code` (e.g. "DCDS" is internally "VFMVF1") — fetching by short name
+// via FMARKET_PRODUCT_URL_PREFIX sidesteps that entirely, no need to know the internal code.
+const FUND_CODES = ["VFF", "VESAF", "VIBF", "VLBF", "DCDS", "DCBF", "DCIP"];
 
-const FMARKET_PRODUCTS_URL = "https://api.fmarket.vn/res/products/filter";
+const FMARKET_PRODUCT_URL_PREFIX = "https://api.fmarket.vn/home/product/";
 const FMARKET_TIMEOUT_MS = 15000;
 // Identify as a real browser UA — this is the same request fmarket.vn's own web frontend
 // makes; an unusual/absent UA is an easy, gratuitous signal for anti-bot filtering.
@@ -125,10 +128,42 @@ async function fetchFiatRates(apiKey) {
   return data.conversion_rates;
 }
 
-// Best-effort: fetches NAV for the whitelisted fund codes and pivots each into a
-// "units per 1 USD" rate via the fresh VND fiat rate. Returns { fundRates, warnings }.
-// Never throws — any failure is captured as a warning and that fund's entry is simply
-// omitted from fundRates (caller falls back to the previous value, if any).
+// Fetches one fund's NAV by short name. Never throws — returns { nav } on success or
+// { error } on any failure (network, non-OK HTTP, malformed JSON, missing/invalid nav).
+async function fetchFundNav(code) {
+  let response;
+  try {
+    response = await fetch(FMARKET_PRODUCT_URL_PREFIX + encodeURIComponent(code), {
+      headers: { "User-Agent": FMARKET_USER_AGENT },
+      signal: AbortSignal.timeout(FMARKET_TIMEOUT_MS),
+    });
+  } catch (err) {
+    return { error: `request failed: ${String(err && err.message)}` };
+  }
+
+  if (!response.ok) {
+    return { error: `HTTP ${response.status} ${response.statusText}` };
+  }
+
+  let body;
+  try {
+    body = await response.json();
+  } catch (err) {
+    return { error: "failed to parse response as JSON" };
+  }
+
+  const nav = body && body.data && body.data.nav;
+  if (typeof nav !== "number" || !(nav > 0)) {
+    return { error: "response missing a valid data.nav" };
+  }
+  return { nav };
+}
+
+// Best-effort: fetches NAV for each whitelisted fund code and pivots it into a "units per 1
+// USD" rate via the fresh VND fiat rate. Returns { fundRates, warnings }. Never throws — each
+// fund is fetched independently, so one fund's failure never affects the others, and any
+// failure is captured as a warning with that fund's entry simply omitted from fundRates
+// (caller falls back to the previous value, if any).
 async function fetchFundRates(fiatRates) {
   const warnings = [];
   const fundRates = {};
@@ -141,68 +176,15 @@ async function fetchFundRates(fiatRates) {
     return { fundRates, warnings };
   }
 
-  let response;
-  try {
-    response = await fetch(FMARKET_PRODUCTS_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": FMARKET_USER_AGENT,
-      },
-      body: JSON.stringify({
-        types: ["NEW_FUND", "TRADING_FUND"],
-        issuerIds: [],
-        sortOrder: "DESC",
-        sortField: "navTo6Months",
-        page: 1,
-        pageSize: 200,
-        isIpo: false,
-        fundAssetTypes: [],
-        bondRemainPeriods: [],
-        searchField: null,
-        searchValue: null,
-        isBuyByReward: false,
-      }),
-      signal: AbortSignal.timeout(FMARKET_TIMEOUT_MS),
-    });
-  } catch (err) {
-    warnings.push(`fmarket.vn request failed: ${String(err && err.message)}`);
-    return { fundRates, warnings };
-  }
-
-  if (!response.ok) {
-    warnings.push(
-      `fmarket.vn responded with HTTP ${response.status} ${response.statusText}.`
-    );
-    return { fundRates, warnings };
-  }
-
-  let body;
-  try {
-    body = await response.json();
-  } catch (err) {
-    warnings.push("Failed to parse fmarket.vn response as JSON.");
-    return { fundRates, warnings };
-  }
-
-  const rows = body && body.data && Array.isArray(body.data.rows) ? body.data.rows : null;
-  if (!rows) {
-    warnings.push("fmarket.vn response missing expected data.rows array.");
-    return { fundRates, warnings };
-  }
-
-  const rowByCode = new Map(rows.map((row) => [row && row.code, row]));
-
   for (const code of FUND_CODES) {
-    const row = rowByCode.get(code);
-    const nav = row && row.nav;
-    if (typeof nav !== "number" || !(nav > 0)) {
-      warnings.push(`Fund "${code}" not found (or has no valid NAV) in fmarket.vn response.`);
+    const result = await fetchFundNav(code);
+    if (result.error) {
+      warnings.push(`Fund "${code}": ${result.error}.`);
       continue;
     }
     // rate[code] = units of `code` per 1 USD, pivoted through VND:
     // 1 USD = vndRate VND; 1 unit of `code` = nav VND  =>  1 USD = (vndRate / nav) units.
-    fundRates[code] = Math.round((vndRate / nav) * 1e6) / 1e6;
+    fundRates[code] = Math.round((vndRate / result.nav) * 1e6) / 1e6;
   }
 
   return { fundRates, warnings };
