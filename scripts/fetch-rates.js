@@ -184,7 +184,11 @@ async function fetchFundRates(fiatRates) {
     }
     // rate[code] = units of `code` per 1 USD, pivoted through VND:
     // 1 USD = vndRate VND; 1 unit of `code` = nav VND  =>  1 USD = (vndRate / nav) units.
-    fundRates[code] = Math.round((vndRate / result.nav) * 1e6) / 1e6;
+    // Deliberately not rounded — fiat rates in this same file keep full source precision too
+    // (e.g. "VND": 25903.0397), and rounding this to only 6dp previously introduced a ~5.8e-7
+    // relative error that, multiplied through a large VND balance, showed up as a
+    // ~200 VND-per-few-hundred-million discrepancy against fmarket's own displayed total.
+    fundRates[code] = vndRate / result.nav;
   }
 
   return { fundRates, warnings };
